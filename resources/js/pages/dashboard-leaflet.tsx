@@ -154,27 +154,39 @@ export default function Dashboard({ potholes, files, activeFile }: DashboardProp
             
             /* Marker active state animation */
             .custom-marker.active > div {
-                animation: pulse 1.5s ease-in-out infinite;
-                transform: scale(1.3);
-                box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.7), 0 4px 8px rgba(0,0,0,0.4) !important;
-                border-width: 4px !important;
+                animation: bounce 0.6s ease-in-out, pulse 1.5s ease-in-out infinite;
+                transform: scale(1.4);
+                filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.8)) drop-shadow(0 4px 12px rgba(0,0,0,0.5));
                 z-index: 1000 !important;
+            }
+            
+            @keyframes bounce {
+                0%, 100% {
+                    transform: scale(1.4) translateY(0);
+                }
+                50% {
+                    transform: scale(1.4) translateY(-10px);
+                }
             }
             
             @keyframes pulse {
                 0% {
-                    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.7), 0 4px 8px rgba(0,0,0,0.4);
+                    filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.8)) drop-shadow(0 4px 12px rgba(0,0,0,0.5));
                 }
                 50% {
-                    box-shadow: 0 0 0 10px rgba(255, 255, 255, 0), 0 4px 8px rgba(0,0,0,0.4);
+                    filter: drop-shadow(0 0 15px rgba(255, 255, 255, 1)) drop-shadow(0 4px 12px rgba(0,0,0,0.5));
                 }
                 100% {
-                    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0), 0 4px 8px rgba(0,0,0,0.4);
+                    filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.8)) drop-shadow(0 4px 12px rgba(0,0,0,0.5));
                 }
             }
             
             .custom-marker > div {
                 transition: all 0.3s ease;
+            }
+            
+            .custom-marker > div svg {
+                filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
             }
         `;
         document.head.appendChild(style);
@@ -243,20 +255,30 @@ export default function Dashboard({ potholes, files, activeFile }: DashboardProp
             // Skip creating marker if not visible
             if (!isVisible) return;
 
-            // Create custom icon with color
+            // Create custom PIN icon with color
             const color = getColorByGforce(gforce);
             const icon = leaflet.divIcon({
                 className: 'custom-marker',
                 html: `<div style="
-                    background-color: ${color};
-                    width: 20px;
-                    height: 20px;
-                    border-radius: 50%;
-                    border: 3px solid white;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-                "></div>`,
-                iconSize: [20, 20],
-                iconAnchor: [10, 10],
+                    position: relative;
+                    width: 30px;
+                    height: 40px;
+                ">
+                    <svg width="30" height="40" viewBox="0 0 30 40" xmlns="http://www.w3.org/2000/svg">
+                        <!-- Pin shadow -->
+                        <ellipse cx="15" cy="38" rx="6" ry="2" fill="rgba(0,0,0,0.2)" />
+                        <!-- Pin body -->
+                        <path d="M15 0C9.5 0 5 4.5 5 10c0 8 10 25 10 25s10-17 10-25c0-5.5-4.5-10-10-10z" 
+                              fill="${color}" 
+                              stroke="white" 
+                              stroke-width="2"/>
+                        <!-- Pin center dot -->
+                        <circle cx="15" cy="10" r="4" fill="white"/>
+                    </svg>
+                </div>`,
+                iconSize: [30, 40],
+                iconAnchor: [15, 40],
+                popupAnchor: [0, -40],
             });
 
             const marker = leaflet.marker([lat, lng], { icon }).addTo(map);
@@ -278,7 +300,7 @@ export default function Dashboard({ potholes, files, activeFile }: DashboardProp
                 </div>
             `);
 
-            // Add click listener
+            // Add click listener with zoom animation
             marker.on('click', () => {
                 // Remove active class from all markers
                 markersMap.forEach((m) => {
@@ -293,6 +315,22 @@ export default function Dashboard({ potholes, files, activeFile }: DashboardProp
                 if (element) {
                     element.classList.add('active');
                 }
+
+                // Zoom animation: zoom out then zoom in
+                const currentZoom = map.getZoom();
+                const targetZoom = 16;
+                
+                // First zoom out
+                map.flyTo([lat, lng], Math.max(currentZoom - 2, 10), {
+                    duration: 0.4,
+                });
+                
+                // Then zoom in to target location
+                setTimeout(() => {
+                    map.flyTo([lat, lng], targetZoom, {
+                        duration: 0.6,
+                    });
+                }, 400);
 
                 setSelectedPothole(pothole);
                 setActiveMarkerId(pothole.id);
@@ -339,7 +377,23 @@ export default function Dashboard({ potholes, files, activeFile }: DashboardProp
         if (map && leaflet) {
             const lat = parseFloat(pothole.latitude);
             const lng = parseFloat(pothole.longitude);
-            map.setView([lat, lng], 16);
+            
+            // Zoom animation: zoom out then zoom in
+            const currentZoom = map.getZoom();
+            const targetZoom = 16;
+            
+            // First zoom out
+            map.flyTo([lat, lng], Math.max(currentZoom - 2, 10), {
+                duration: 0.4,
+            });
+            
+            // Then zoom in to target location
+            setTimeout(() => {
+                map.flyTo([lat, lng], targetZoom, {
+                    duration: 0.6,
+                });
+            }, 400);
+            
             setSelectedPothole(pothole);
 
             // Remove active class from all markers
@@ -357,8 +411,10 @@ export default function Dashboard({ potholes, files, activeFile }: DashboardProp
                 if (element) {
                     element.classList.add('active');
                 }
-                // Open popup
-                selectedMarker.openPopup();
+                // Open popup after zoom animation completes
+                setTimeout(() => {
+                    selectedMarker.openPopup();
+                }, 1000);
             }
 
             setActiveMarkerId(pothole.id);
