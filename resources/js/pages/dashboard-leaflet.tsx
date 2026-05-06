@@ -300,7 +300,7 @@ export default function Dashboard({ potholes, files, activeFile }: DashboardProp
                 </div>
             `);
 
-            // Add click listener with zoom animation
+            // Add click listener with smooth zoom animation
             marker.on('click', () => {
                 // Remove active class from all markers
                 markersMap.forEach((m) => {
@@ -316,21 +316,24 @@ export default function Dashboard({ potholes, files, activeFile }: DashboardProp
                     element.classList.add('active');
                 }
 
-                // Zoom animation: zoom out then zoom in
+                // Smooth zoom animation: zoom out then zoom in
                 const currentZoom = map.getZoom();
-                const targetZoom = 16;
+                const targetZoom = 17;
+                const intermediateZoom = Math.max(currentZoom - 3, 9);
                 
-                // First zoom out
-                map.flyTo([lat, lng], Math.max(currentZoom - 2, 10), {
-                    duration: 0.4,
+                // First zoom out smoothly
+                map.flyTo([lat, lng], intermediateZoom, {
+                    duration: 0.8,
+                    easeLinearity: 0.25,
                 });
                 
-                // Then zoom in to target location
+                // Then zoom in to target location smoothly
                 setTimeout(() => {
                     map.flyTo([lat, lng], targetZoom, {
-                        duration: 0.6,
+                        duration: 1.2,
+                        easeLinearity: 0.25,
                     });
-                }, 400);
+                }, 850);
 
                 setSelectedPothole(pothole);
                 setActiveMarkerId(pothole.id);
@@ -378,21 +381,24 @@ export default function Dashboard({ potholes, files, activeFile }: DashboardProp
             const lat = parseFloat(pothole.latitude);
             const lng = parseFloat(pothole.longitude);
             
-            // Zoom animation: zoom out then zoom in
+            // Smooth zoom animation: zoom out then zoom in
             const currentZoom = map.getZoom();
-            const targetZoom = 16;
+            const targetZoom = 17;
+            const intermediateZoom = Math.max(currentZoom - 3, 9);
             
-            // First zoom out
-            map.flyTo([lat, lng], Math.max(currentZoom - 2, 10), {
-                duration: 0.4,
+            // First zoom out smoothly
+            map.flyTo([lat, lng], intermediateZoom, {
+                duration: 0.8,
+                easeLinearity: 0.25,
             });
             
-            // Then zoom in to target location
+            // Then zoom in to target location smoothly
             setTimeout(() => {
                 map.flyTo([lat, lng], targetZoom, {
-                    duration: 0.6,
+                    duration: 1.2,
+                    easeLinearity: 0.25,
                 });
-            }, 400);
+            }, 850);
             
             setSelectedPothole(pothole);
 
@@ -414,7 +420,7 @@ export default function Dashboard({ potholes, files, activeFile }: DashboardProp
                 // Open popup after zoom animation completes
                 setTimeout(() => {
                     selectedMarker.openPopup();
-                }, 1000);
+                }, 2100);
             }
 
             setActiveMarkerId(pothole.id);
