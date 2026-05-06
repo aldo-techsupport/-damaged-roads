@@ -9,6 +9,7 @@ import AppSidebarLayout from '@/layouts/app/app-sidebar-layout';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { DotLottieReact } from '@lottiefiles/dotlottie-react';
 
 interface Pothole {
     id: number;
@@ -50,6 +51,12 @@ export default function Dashboard({ potholes, files, activeFile }: DashboardProp
     const [activeMarkerId, setActiveMarkerId] = useState<number | null>(null);
     const [currentPage, setCurrentPage] = useState(1);
     const [severityFilter, setSeverityFilter] = useState<'all' | 'severe' | 'moderate' | 'mild'>('all');
+    const [routeLines, setRouteLines] = useState<any[]>([]);
+    const [showRoutes, setShowRoutes] = useState(true);
+    const [isLoadingData, setIsLoadingData] = useState(false);
+    const [showStatsDialog, setShowStatsDialog] = useState(false);
+    const [lastClickTime, setLastClickTime] = useState<number>(0);
+    const [lastClickedFileId, setLastClickedFileId] = useState<number | null>(null);
     const itemsPerPage = 20;
 
     const { data, setData, put, processing } = useForm({
@@ -59,9 +66,53 @@ export default function Dashboard({ potholes, files, activeFile }: DashboardProp
         recorded_at: '',
     });
 
-    const handleFileSelect = (fileId: number) => {
+    const handleFileSelect = (fileId: number, isAlreadyImported: boolean) => {
+        const currentTime = new Date().getTime();
+        const timeDiff = currentTime - lastClickTime;
+        
+        // Double click detection (within 500ms)
+        if (isAlreadyImported && lastClickedFileId === fileId && timeDiff < 500) {
+            // Double click on active file = unload (no confirmation)
+            setIsFileDialogOpen(false);
+            router.post('/dashboard/unload-data', {}, {
+                onStart: () => {
+                    const globalLoading = document.getElementById('global-loading');
+                    if (globalLoading) {
+                        globalLoading.style.display = 'none';
+                    }
+                }
+            });
+            return;
+        }
+        
+        // Update last click info
+        setLastClickTime(currentTime);
+        setLastClickedFileId(fileId);
+        
+        // Jika file sudah aktif, jangan lakukan apa-apa (single click)
+        if (isAlreadyImported) {
+            return;
+        }
+        
         setIsFileDialogOpen(false);
-        router.post(`/dashboard/load-file/${fileId}`);
+        setIsLoadingData(true);
+        
+        router.post(`/dashboard/load-file/${fileId}`, {}, {
+            onStart: () => {
+                // Disable global loading
+                const globalLoading = document.getElementById('global-loading');
+                if (globalLoading) {
+                    globalLoading.style.display = 'none';
+                }
+            },
+            onFinish: () => {
+                // Delay to show animation then show stats dialog
+                setTimeout(() => {
+                    setIsLoadingData(false);
+                    setShowStatsDialog(true);
+                }, 500);
+            }
+        });
     };
 
     const handleUploadClick = () => {
@@ -126,6 +177,12 @@ export default function Dashboard({ potholes, files, activeFile }: DashboardProp
     };
 
     useEffect(() => {
+        // Load Lottie Player script
+        const lottieScript = document.createElement('script');
+        lottieScript.src = 'https://unpkg.com/@dotlottie/player-component@2.7.12/dist/dotlottie-player.mjs';
+        lottieScript.type = 'module';
+        document.head.appendChild(lottieScript);
+
         // Load Leaflet CSS
         const link = document.createElement('link');
         link.rel = 'stylesheet';
@@ -202,43 +259,79 @@ export default function Dashboard({ potholes, files, activeFile }: DashboardProp
             setLeaflet(L);
 
             if (mapRef.current && potholes.length > 0) {
-                // Initialize map only once with zoom controls
-                const leafletMap = L.map(mapRef.current, {
-                    center: [-1.15, 114.6],
-                    zoom: 11,
-                    zoomControl: true,
-                    scrollWheelZoom: true,
-                    doubleClickZoom: true,
-                    touchZoom: true,
-                });
+                // Check if map is already initialized
+                if (map) {
+                    try {
+                        map.remove();
+                        setMap(null);
+                    } catch (e) {
+                        console.log('Removing existing map:', e);
+                    }
+                }
+                
+                // Small delay to ensure DOM is ready
+                setTimeout(() => {
+                    if (!mapRef.current) return;
+                    
+                    // Initialize map only once with zoom controls
+                    const leafletMap = L.map(mapRef.current, {
+                        center: [-1.15, 114.6],
+                        zoom: 11,
+                        zoomControl: true,
+                        scrollWheelZoom: true,
+                        doubleClickZoom: true,
+                        touchZoom: true,
+                    });
 
-                // Add OpenStreetMap tiles (FREE!)
-                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                    attribution:
-                        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-                    maxZoom: 19,
-                    minZoom: 3,
-                }).addTo(leafletMap);
+                    // Add OpenStreetMap tiles (FREE!)
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        attribution:
+                            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+                        maxZoom: 19,
+                        minZoom: 3,
+                    }).addTo(leafletMap);
 
-                setMap(leafletMap);
+                    setMap(leafletMap);
+                }, 100);
             }
         };
 
         return () => {
             if (map) {
-                map.remove();
+                try {
+                    map.off();
+                    map.remove();
+                } catch (e) {
+                    console.log('Map cleanup error:', e);
+                }
             }
         };
     }, [potholes.length]);
 
     // Update markers when filter changes - but keep ALL markers, just hide/show them
     useEffect(() => {
-        if (!map || !leaflet || potholes.length === 0) return;
-
+        if (!map || !leaflet) return;
+        
+        // Check if map container is still valid
+        if (!map.getContainer()) {
+            console.log('Map container not ready');
+            return;
+        }
+        
         // Clear existing markers
         markers.forEach((marker) => {
-            map.removeLayer(marker);
+            try {
+                map.removeLayer(marker);
+            } catch (e) {
+                console.log('Error removing marker:', e);
+            }
         });
+
+        // If no potholes, clear markers and return
+        if (potholes.length === 0) {
+            setMarkers(new Map());
+            return;
+        }
 
         // Store markers in a Map for later reference
         const markersMap = new Map<number, any>();
@@ -281,63 +374,67 @@ export default function Dashboard({ potholes, files, activeFile }: DashboardProp
                 popupAnchor: [0, -40],
             });
 
-            const marker = leaflet.marker([lat, lng], { icon }).addTo(map);
+            try {
+                const marker = leaflet.marker([lat, lng], { icon }).addTo(map);
 
-            // Store marker reference
-            markersMap.set(pothole.id, marker);
+                // Store marker reference
+                markersMap.set(pothole.id, marker);
 
-            // Add popup
-            marker.bindPopup(`
-                <div style="min-width: 200px;">
-                    <strong>Pothole #${pothole.id}</strong><br/>
-                    <span style="color: ${color}; font-weight: bold;">
-                        ${getSeverityLabel(gforce)} (${gforce})
-                    </span><br/>
-                    <small>${new Date(pothole.recorded_at).toLocaleString()}</small><br/>
-                    <a href="${pothole.maps_link}" target="_blank" style="color: #2563eb;">
-                        Buka di Google Maps →
-                    </a>
-                </div>
-            `);
+                // Add popup
+                marker.bindPopup(`
+                    <div style="min-width: 200px;">
+                        <strong>Pothole #${pothole.id}</strong><br/>
+                        <span style="color: ${color}; font-weight: bold;">
+                            ${getSeverityLabel(gforce)} (${gforce})
+                        </span><br/>
+                        <small>${new Date(pothole.recorded_at).toLocaleString()}</small><br/>
+                        <a href="${pothole.maps_link}" target="_blank" style="color: #2563eb;">
+                            Buka di Google Maps →
+                        </a>
+                    </div>
+                `);
 
-            // Add click listener with smooth zoom animation
-            marker.on('click', () => {
-                // Remove active class from all markers
-                markersMap.forEach((m) => {
-                    const element = m.getElement();
+                // Add click listener with smooth zoom animation
+                marker.on('click', () => {
+                    // Remove active class from all markers
+                    markersMap.forEach((m) => {
+                        const element = m.getElement();
+                        if (element) {
+                            element.classList.remove('active');
+                        }
+                    });
+
+                    // Add active class to clicked marker
+                    const element = marker.getElement();
                     if (element) {
-                        element.classList.remove('active');
+                        element.classList.add('active');
                     }
-                });
 
-                // Add active class to clicked marker
-                const element = marker.getElement();
-                if (element) {
-                    element.classList.add('active');
-                }
-
-                // Smooth zoom animation: zoom out then zoom in
-                const currentZoom = map.getZoom();
-                const targetZoom = 17;
-                const intermediateZoom = Math.max(currentZoom - 3, 9);
-                
-                // First zoom out smoothly
-                map.flyTo([lat, lng], intermediateZoom, {
-                    duration: 0.8,
-                    easeLinearity: 0.25,
-                });
-                
-                // Then zoom in to target location smoothly
-                setTimeout(() => {
-                    map.flyTo([lat, lng], targetZoom, {
-                        duration: 1.2,
+                    // Smooth zoom animation: zoom out then zoom in
+                    const currentZoom = map.getZoom();
+                    const targetZoom = 17;
+                    const intermediateZoom = Math.max(currentZoom - 3, 9);
+                    
+                    // First zoom out smoothly
+                    map.flyTo([lat, lng], intermediateZoom, {
+                        duration: 0.8,
                         easeLinearity: 0.25,
                     });
-                }, 850);
+                    
+                    // Then zoom in to target location smoothly
+                    setTimeout(() => {
+                        map.flyTo([lat, lng], targetZoom, {
+                            duration: 1.2,
+                            easeLinearity: 0.25,
+                        });
+                    }, 850);
 
-                setSelectedPothole(pothole);
-                setActiveMarkerId(pothole.id);
-            });
+                    setSelectedPothole(pothole);
+                    setActiveMarkerId(pothole.id);
+                });
+            } catch (e) {
+                console.log('Error adding marker:', e);
+            }
         });
 
         // Save markers to state
@@ -346,11 +443,15 @@ export default function Dashboard({ potholes, files, activeFile }: DashboardProp
         // Calculate bounds only for visible markers
         const visiblePotholes = potholes.filter(matchesFilter);
         if (visiblePotholes.length > 0) {
-            const bounds: [number, number][] = visiblePotholes.map((pothole) => [
-                parseFloat(pothole.latitude),
-                parseFloat(pothole.longitude),
-            ]);
-            map.fitBounds(bounds, { padding: [50, 50] });
+            try {
+                const bounds: [number, number][] = visiblePotholes.map((pothole) => [
+                    parseFloat(pothole.latitude),
+                    parseFloat(pothole.longitude),
+                ]);
+                map.fitBounds(bounds, { padding: [50, 50] });
+            } catch (e) {
+                console.log('Error fitting bounds:', e);
+            }
         }
     }, [map, leaflet, severityFilter, potholes]);
 
@@ -427,9 +528,272 @@ export default function Dashboard({ potholes, files, activeFile }: DashboardProp
         }
     };
 
+    // Function to fetch route from OSRM API
+    const fetchRoute = async (start: [number, number], end: [number, number]) => {
+        try {
+            const response = await fetch(
+                `https://router.project-osrm.org/route/v1/driving/${start[1]},${start[0]};${end[1]},${end[0]}?overview=full&geometries=geojson`
+            );
+            const data = await response.json();
+            
+            if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
+                return {
+                    coordinates: data.routes[0].geometry.coordinates,
+                    distance: data.routes[0].distance,
+                    onRoad: true
+                };
+            }
+            return null;
+        } catch (error) {
+            console.error('Error fetching route:', error);
+            return null;
+        }
+    };
+
+    // Function to draw routes between consecutive potholes
+    const drawRoutes = async () => {
+        if (!map || !leaflet || potholes.length < 2) return;
+        
+        // Clear existing route lines
+        routeLines.forEach(line => {
+            try {
+                map.removeLayer(line);
+            } catch (e) {
+                console.log('Error removing route line:', e);
+            }
+        });
+        
+        const newRouteLines: any[] = [];
+        const visiblePotholes = potholes.filter(matchesFilter);
+        
+        if (visiblePotholes.length < 2) {
+            setRouteLines([]);
+            return;
+        }
+        
+        // Sort potholes by recorded_at to draw routes in chronological order
+        const sortedPotholes = [...visiblePotholes].sort((a, b) => 
+            new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime()
+        );
+        
+        // Fetch all routes in parallel for faster loading
+        const routePromises: Array<{
+            startCoord: [number, number];
+            endCoord: [number, number];
+            routePromise: Promise<any>;
+        }> = [];
+        
+        for (let i = 0; i < sortedPotholes.length - 1; i++) {
+            const start = sortedPotholes[i];
+            const end = sortedPotholes[i + 1];
+            
+            const startCoord: [number, number] = [parseFloat(start.latitude), parseFloat(start.longitude)];
+            const endCoord: [number, number] = [parseFloat(end.latitude), parseFloat(end.longitude)];
+            
+            routePromises.push({
+                startCoord,
+                endCoord,
+                routePromise: fetchRoute(startCoord, endCoord)
+            });
+        }
+        
+        // Wait for all routes to be fetched in parallel
+        const routes = await Promise.all(routePromises.map(p => p.routePromise));
+        
+        // Draw all routes
+        routes.forEach((route, index) => {
+            const { startCoord, endCoord } = routePromises[index];
+            
+            if (route && route.onRoad) {
+                // Draw blue solid line for road route
+                const routeCoords = route.coordinates.map((coord: number[]) => [coord[1], coord[0]]);
+                const polyline = leaflet.polyline(routeCoords, {
+                    color: '#3b82f6',
+                    weight: 4,
+                    opacity: 0.8,
+                    smoothFactor: 1
+                }).addTo(map);
+                
+                newRouteLines.push(polyline);
+            } else {
+                // Draw dashed line for direct connection (off-road)
+                const polyline = leaflet.polyline([startCoord, endCoord], {
+                    color: '#ffffff',
+                    weight: 3,
+                    opacity: 0.7,
+                    dashArray: '10, 10',
+                    dashOffset: '0'
+                }).addTo(map);
+                
+                newRouteLines.push(polyline);
+            }
+        });
+        
+        setRouteLines(newRouteLines);
+    };
+
+    // Toggle routes visibility
+    const toggleRoutes = () => {
+        if (showRoutes) {
+            // Hide routes
+            routeLines.forEach(line => {
+                try {
+                    map.removeLayer(line);
+                } catch (e) {
+                    console.log('Error removing route:', e);
+                }
+            });
+            setRouteLines([]);
+            setShowRoutes(false);
+        } else {
+            // Show routes
+            setShowRoutes(true);
+            drawRoutes();
+        }
+    };
+
+    // Auto-draw routes when map is ready and when filter changes
+    useEffect(() => {
+        if (showRoutes && map && leaflet && potholes.length >= 2) {
+            drawRoutes();
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [severityFilter, showRoutes, map, leaflet, potholes.length]);
+
     return (
         <AppSidebarLayout breadcrumbs={[{ label: 'Dashboard' }]}>
             <Head title="Dashboard - Deteksi Lubang Jalan" />
+
+            {/* Loading Data Animation */}
+            {isLoadingData && (
+                <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm">
+                    <div className="text-center">
+                        <DotLottieReact
+                            src="https://lottie.host/0608a634-c460-4761-9051-48540700a6b7/XNVvVvvu6m.lottie"
+                            loop
+                            autoplay
+                            style={{ width: 400, height: 400, margin: '0 auto' }}
+                        />
+                        <p className="mt-4 text-xl font-semibold text-white">Memuat Data...</p>
+                        <p className="mt-2 text-sm text-gray-300">Mohon tunggu sebentar</p>
+                    </div>
+                </div>
+            )}
+
+            {/* Statistics Dialog */}
+            <Dialog open={showStatsDialog} onOpenChange={setShowStatsDialog}>
+                <DialogContent className="max-w-4xl">
+                    <DialogHeader>
+                        <DialogTitle className="text-2xl">Statistik Data Lubang Jalan</DialogTitle>
+                        <DialogDescription>
+                            Ringkasan kondisi lubang jalan berdasarkan tingkat kerusakan
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6">
+                        {/* Rusak Berat */}
+                        <Card className="border-red-200 bg-red-50/50">
+                            <CardContent className="pt-6">
+                                <div className="text-center space-y-4">
+                                    <DotLottieReact
+                                        src="https://lottie.host/be33974e-e59d-448b-9754-9bf87e0250dc/0szTNI5KYS.lottie"
+                                        loop
+                                        autoplay
+                                        style={{ width: 120, height: 120, margin: '0 auto' }}
+                                    />
+                                    <div>
+                                        <h3 className="text-lg font-semibold text-red-700">Rusak Berat</h3>
+                                        <p className="text-sm text-red-600 mb-3">G-Force ≥ 1.15</p>
+                                        <div className="text-4xl font-bold text-red-700">
+                                            {potholes.filter(p => parseFloat(p.gforce) >= 1.15).length}
+                                        </div>
+                                        <p className="text-sm text-muted-foreground mt-1">
+                                            {potholes.length > 0 ? ((potholes.filter(p => parseFloat(p.gforce) >= 1.15).length / potholes.length) * 100).toFixed(1) : 0}% dari total
+                                        </p>
+                                    </div>
+                                </div>
+                            </CardContent>
+                        </Card>
+
+                        {/* Rusak Sedang */}
+                        <Card className="border-orange-200 bg-orange-50/50">
+                            <CardContent className="pt-6">
+                                <div className="text-center space-y-4">
+                                    <DotLottieReact
+                                        src="https://lottie.host/93c6e0a1-db84-421c-94aa-64db6e2703cd/J2nxLCmoxp.lottie"
+                                        loop
+                                        autoplay
+                                        style={{ width: 120, height: 120, margin: '0 auto' }}
+                                    />
+                                    <div>
+                                        <h3 className="text-lg font-semibold text-orange-700">Rusak Sedang</h3>
+                                        <p className="text-sm text-orange-600 mb-3">1.05 ≤ G-Force &lt; 1.15</p>
+                                        <div className="text-4xl font-bold text-orange-700">
+                                            {potholes.filter(p => {
+                                                const gf = parseFloat(p.gforce);
+                                                return gf >= 1.05 && gf < 1.15;
+                                            }).length}
+                                        </div>
+                                        <p className="text-sm text-muted-foreground mt-1">
+                                            {potholes.length > 0 ? ((potholes.filter(p => {
+                                                const gf = parseFloat(p.gforce);
+                                                return gf >= 1.05 && gf < 1.15;
+                                            }).length / potholes.length) * 100).toFixed(1) : 0}% dari total
+                                        </p>
+                                    </div>
+                                </div>
+                            </CardContent>
+                        </Card>
+
+                        {/* Rusak Ringan */}
+                        <Card className="border-yellow-200 bg-yellow-50/50">
+                            <CardContent className="pt-6">
+                                <div className="text-center space-y-4">
+                                    <DotLottieReact
+                                        src="https://lottie.host/47171dc5-8c34-4425-a835-6e7a19a5a06b/gn6vAGhm6D.lottie"
+                                        loop
+                                        autoplay
+                                        style={{ width: 120, height: 120, margin: '0 auto' }}
+                                    />
+                                    <div>
+                                        <h3 className="text-lg font-semibold text-yellow-700">Rusak Ringan</h3>
+                                        <p className="text-sm text-yellow-600 mb-3">G-Force &lt; 1.05</p>
+                                        <div className="text-4xl font-bold text-yellow-700">
+                                            {potholes.filter(p => parseFloat(p.gforce) < 1.05).length}
+                                        </div>
+                                        <p className="text-sm text-muted-foreground mt-1">
+                                            {potholes.length > 0 ? ((potholes.filter(p => parseFloat(p.gforce) < 1.05).length / potholes.length) * 100).toFixed(1) : 0}% dari total
+                                        </p>
+                                    </div>
+                                </div>
+                            </CardContent>
+                        </Card>
+                    </div>
+
+                    {/* Total Summary */}
+                    <Card className="mt-4 bg-primary/5 border-primary/20">
+                        <CardContent className="pt-6">
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <h3 className="text-lg font-semibold">Total Lubang Jalan Terdeteksi</h3>
+                                    <p className="text-sm text-muted-foreground">
+                                        File: {activeFile?.original_filename}
+                                    </p>
+                                </div>
+                                <div className="text-5xl font-bold text-primary">
+                                    {potholes.length}
+                                </div>
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                    <div className="flex justify-end mt-4">
+                        <Button onClick={() => setShowStatsDialog(false)}>
+                            Tutup
+                        </Button>
+                    </div>
+                </DialogContent>
+            </Dialog>
 
             <div className="space-y-6">
                 <Heading 
@@ -500,7 +864,7 @@ export default function Dashboard({ potholes, files, activeFile }: DashboardProp
                                                         className={`flex items-center justify-between p-4 border rounded-lg cursor-pointer transition-all hover:border-primary hover:bg-accent ${
                                                             file.is_imported ? 'border-primary bg-primary/5' : ''
                                                         }`}
-                                                        onClick={() => handleFileSelect(file.id)}
+                                                        onClick={() => handleFileSelect(file.id, file.is_imported)}
                                                     >
                                                         <div className="flex items-center gap-3 flex-1">
                                                             <div className={`p-2 rounded-lg ${file.is_imported ? 'bg-primary/10' : 'bg-muted'}`}>
@@ -664,14 +1028,35 @@ export default function Dashboard({ potholes, files, activeFile }: DashboardProp
                 <div className="grid gap-6 lg:grid-cols-3">
                     <Card className="lg:col-span-2">
                         <CardHeader>
-                            <CardTitle>Peta Lokasi</CardTitle>
-                            <CardDescription>
-                                Klik marker untuk detail. Warna: 🔴 Parah, 🟠 Sedang, 🟡 Ringan
-                            </CardDescription>
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <CardTitle>Peta Lokasi</CardTitle>
+                                    <CardDescription>
+                                        Klik marker untuk detail. Warna: 🔴 Parah, 🟠 Sedang, 🟡 Ringan
+                                    </CardDescription>
+                                </div>
+                                <Button
+                                    variant={showRoutes ? "default" : "outline"}
+                                    size="sm"
+                                    onClick={toggleRoutes}
+                                    disabled={potholes.length < 2}
+                                >
+                                    {showRoutes ? 'Sembunyikan Rute' : 'Tampilkan Rute'}
+                                </Button>
+                            </div>
                         </CardHeader>
                         <CardContent>
                             <div ref={mapRef} className="w-full h-[600px] rounded-lg border relative z-0" />
+                            
                             <p className="text-xs text-muted-foreground mt-2">
+                                {showRoutes && (
+                                    <span>
+                                        <span className="inline-block w-8 h-0.5 bg-blue-500 mr-1 align-middle"></span>
+                                        Rute di jalan raya
+                                        <span className="inline-block w-8 h-0.5 bg-white border-t-2 border-dashed ml-3 mr-1 align-middle"></span>
+                                        Koneksi langsung
+                                    </span>
+                                )}
                             </p>
                         </CardContent>
                     </Card>

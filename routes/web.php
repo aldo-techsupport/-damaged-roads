@@ -13,6 +13,7 @@ Route::get('/', function () {
 Route::middleware(['auth'])->group(function () {
     Route::get('dashboard', [DashboardController::class, 'index'])->name('dashboard');
     Route::post('dashboard/load-file/{id}', [DashboardController::class, 'loadFile'])->name('dashboard.loadFile');
+    Route::post('dashboard/unload-data', [DashboardController::class, 'unloadData'])->name('dashboard.unloadData');
     
     // Pothole CRUD
     Route::put('potholes/{id}', [PotholeController::class, 'update'])->name('potholes.update');

@@ -80,4 +80,15 @@ class DashboardController extends Controller
 
         return redirect()->back()->with('success', "Berhasil load {$imported} data dari {$potholeFile->original_filename}!");
     }
+    
+    public function unloadData()
+    {
+        // Hapus semua data potholes
+        Pothole::truncate();
+        
+        // Reset semua file ke not imported
+        PotholeFile::query()->update(['is_imported' => false, 'imported_at' => null]);
+        
+        return redirect()->back()->with('success', 'Data berhasil di-unload!');
+    }
 }
