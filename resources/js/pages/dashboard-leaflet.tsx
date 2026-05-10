@@ -528,6 +528,60 @@ export default function Dashboard({ potholes, files, activeFile }: DashboardProp
         }
     };
 
+    // Haversine distance in meters between two [lat, lng] points
+    const haversineDistance = (a: [number, number], b: [number, number]): number => {
+        const toRad = (deg: number) => (deg * Math.PI) / 180;
+        const R = 6371000; // earth radius in meters
+        const dLat = toRad(b[0] - a[0]);
+        const dLng = toRad(b[1] - a[1]);
+        const lat1 = toRad(a[0]);
+        const lat2 = toRad(b[0]);
+        const h =
+            Math.sin(dLat / 2) ** 2 +
+            Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+        return 2 * R * Math.asin(Math.sqrt(h));
+    };
+
+    // Perpendicular distance in meters from point P to infinite line AB.
+    // Uses an equirectangular projection – accurate enough for small areas.
+    const perpendicularDistance = (
+        p: [number, number],
+        a: [number, number],
+        b: [number, number]
+    ): number => {
+        const latScale = 111320; // meters per degree latitude
+        const lngScale = 111320 * Math.cos((p[0] * Math.PI) / 180);
+        const px = p[1] * lngScale;
+        const py = p[0] * latScale;
+        const ax = a[1] * lngScale;
+        const ay = a[0] * latScale;
+        const bx = b[1] * lngScale;
+        const by = b[0] * latScale;
+        const dx = bx - ax;
+        const dy = by - ay;
+        const len = Math.sqrt(dx * dx + dy * dy);
+        if (len === 0) return Math.sqrt((px - ax) ** 2 + (py - ay) ** 2);
+        return Math.abs(dy * px - dx * py + bx * ay - by * ax) / len;
+    };
+
+    // Returns the largest perpendicular deviation of the route from the
+    // straight line between start/end. Big deviation = OSRM is detouring
+    // sideways through unrelated roads.
+    const maxRouteDeviation = (
+        routeCoords: number[][],
+        start: [number, number],
+        end: [number, number]
+    ): number => {
+        let maxDev = 0;
+        for (const c of routeCoords) {
+            // OSRM geojson coords are [lng, lat]
+            const p: [number, number] = [c[1], c[0]];
+            const d = perpendicularDistance(p, start, end);
+            if (d > maxDev) maxDev = d;
+        }
+        return maxDev;
+    };
+
     // Function to fetch route from OSRM API
     const fetchRoute = async (start: [number, number], end: [number, number]) => {
         try {
@@ -603,8 +657,36 @@ export default function Dashboard({ potholes, files, activeFile }: DashboardProp
         // Draw all routes
         routes.forEach((route, index) => {
             const { startCoord, endCoord } = routePromises[index];
-            
-            if (route && route.onRoad) {
+            const straightDistance = haversineDistance(startCoord, endCoord);
+
+            // Decide whether OSRM's route is trustworthy or is a detour
+            // through unrelated roads (case the user wants rendered as dashed).
+            //
+            // A route is treated as a "real" connecting road when ALL of:
+            //   1. OSRM returned a route at all
+            //   2. The route distance is not dramatically longer than the
+            //      straight line (allows normal winding roads).
+            //   3. The route doesn't swing far sideways from the straight line
+            //      (detours typically zig-zag far off the A-B axis).
+            //
+            // Tunable thresholds – adjust if road network around the data is
+            // unusually sparse or dense.
+            const DETOUR_RATIO = 1.8;           // route <= 1.8x straight line
+            const MAX_SIDE_DEVIATION_M = 400;   // absolute max sideways meters
+            const MAX_SIDE_DEVIATION_RATIO = 0.4; // or <= 40% of straight line
+            const MIN_STRAIGHT_DISTANCE = 30;   // < 30m: points are basically the same
+
+            let isValidRoad = false;
+            if (route && route.onRoad && straightDistance >= MIN_STRAIGHT_DISTANCE) {
+                const ratioOk = route.distance <= straightDistance * DETOUR_RATIO;
+                const deviation = maxRouteDeviation(route.coordinates, startCoord, endCoord);
+                const deviationOk =
+                    deviation <=
+                    Math.max(MAX_SIDE_DEVIATION_M, straightDistance * MAX_SIDE_DEVIATION_RATIO);
+                isValidRoad = ratioOk && deviationOk;
+            }
+
+            if (isValidRoad) {
                 // Draw blue solid line for road route
                 const routeCoords = route.coordinates.map((coord: number[]) => [coord[1], coord[0]]);
                 const polyline = leaflet.polyline(routeCoords, {
@@ -616,12 +698,12 @@ export default function Dashboard({ potholes, files, activeFile }: DashboardProp
                 
                 newRouteLines.push(polyline);
             } else {
-                // Draw dashed line for direct connection (off-road)
+                // Draw dashed line for direct connection (no suitable road / off-road)
                 const polyline = leaflet.polyline([startCoord, endCoord], {
-                    color: '#ffffff',
+                    color: '#3b82f6',
                     weight: 3,
-                    opacity: 0.7,
-                    dashArray: '10, 10',
+                    opacity: 0.8,
+                    dashArray: '8, 10',
                     dashOffset: '0'
                 }).addTo(map);
                 
